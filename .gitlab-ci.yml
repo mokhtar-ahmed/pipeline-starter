@@ -1,0 +1,61 @@
+image: python:latest
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+    - venv/
+
+stages:
+  - test
+  - deploy
+  
+before_script:
+  - python -V  # Print out python version for debugging
+  - pip install virtualenv
+  - virtualenv venv
+  - source venv/bin/activate
+  - pip install -r requirements.txt
+  - curl -fL https://getcli.jfrog.io | sh
+  - ./jfrog config add artifactory --url=$ARTIFACTORY_URL --user=$ARTIFACTORY_USER --password=$ARTIFACTORY_PASS
+  - ./jfrog rt pipc --server-id-resolve artifactory --repo-resolve ma-pypi
+  - ./jfrog rt c show
+
+test:
+  stage: test
+  script:
+    - python setup.py test
+
+staging:
+  stage: deploy
+  script:
+  - python setup.py bdist_wheel
+  - ./jfrog rt u dist/ ma-pypi/ --build-name=my-pipeline-snapshot-build --build-number=$CI_JOB_ID --module=pipeline-snapshot
+  - ./jfrog rt bce my-pipeline-snapshot-build $CI_JOB_ID
+  - ./jfrog rt bp  my-pipeline-snapshot-build $CI_JOB_ID
+  - ./jfrog rt pip-install pipeline-snapshot
+  - pip show pipeline-snapshot
+
+  artifacts:
+    paths:
+      - dist/*.whl
+  only:
+  - develop
+
+production:
+  stage: deploy
+  script:
+    - python setup.py bdist_wheel
+    - ./jfrog rt u dist/ ma-pypi/ --build-name=my-pipeline-build --build-number=$CI_JOB_ID --module=pipeline
+    - ./jfrog rt bce my-pipeline-build $CI_JOB_ID
+    - ./jfrog rt bp my-pipeline-build $CI_JOB_ID
+    - ./jfrog rt pip-install pipeline
+    - pip show pipeline
+
+  artifacts:
+    paths:
+      - dist/*.whl
+  only:
+  - master
